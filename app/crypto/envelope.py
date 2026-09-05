@@ -28,8 +28,8 @@ class GovPayCrypto:
         self.kms = kms
         self.mac_key = mac_key or secrets.token_bytes(32)
 
-    def _wrap(self, algorithm: str, key_id: str, ciphertext: str) -> str:
-        body = {"algorithm": algorithm, "key_id": key_id, "ciphertext": ciphertext}
+    def _wrap(self, algorithm: str, key_id: str, version: int, ciphertext: str) -> str:
+        body = {"algorithm": algorithm, "key_id": key_id, "version": version, "ciphertext": ciphertext}
         body["mac"] = mac_bytes(self.mac_key, _canonical(body))
         return json.dumps(body, separators=(",", ":"))
 
@@ -39,15 +39,18 @@ class GovPayCrypto:
             tag = body.pop("mac")
         except (TypeError, ValueError, KeyError) as exc:
             raise ValueError("integrity check failed: malformed envelope") from exc
+        legacy = "version" not in body
         if not verify_mac(self.mac_key, _canonical(body), tag):
             raise ValueError("integrity check failed: ciphertext or metadata was modified")
-        return body, self.kms.get_active(body["key_id"])
+        if legacy:
+            body["version"] = 1
+        return body, self.kms.get_for_decryption(body["key_id"], body["version"])
 
     def encrypt_user_record(self, record: dict[str, Any], key_id: str) -> str:
         key = self.kms.get_active(key_id)
         if key.algorithm != "RSA":
             raise ValueError("user records require an RSA key")
-        return self._wrap("RSA", key_id, rsa_encrypt(RSAPublicKey(**key.public), _canonical(record)))
+        return self._wrap("RSA", key_id, key.version, rsa_encrypt(RSAPublicKey(**key.public), _canonical(record)))
 
     def decrypt_user_record(self, envelope: str) -> dict[str, Any]:
         body, key = self._unwrap(envelope)
@@ -59,7 +62,7 @@ class GovPayCrypto:
         key = self.kms.get_active(key_id)
         if key.algorithm != "ECC":
             raise ValueError("post records require an ECC key")
-        return self._wrap("ECC", key_id, ecc_encrypt(ECCPublicKey(**key.public), _canonical(record)))
+        return self._wrap("ECC", key_id, key.version, ecc_encrypt(ECCPublicKey(**key.public), _canonical(record)))
 
     def decrypt_post_record(self, envelope: str) -> dict[str, Any]:
         body, key = self._unwrap(envelope)

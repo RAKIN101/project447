@@ -67,6 +67,12 @@ class KeyManagementModule:
             raise ValueError("key is not active")
         return max(active, key=lambda item: item.version)
 
+    def get_for_decryption(self, key_id: str, version: int) -> KeyRecord:
+        records = [item for item in self.records.values() if item.key_id == key_id and item.version == version]
+        if not records or records[0].status == "revoked":
+            raise ValueError("key version is unavailable")
+        return records[0]
+
     def rotate(self, key_id: str) -> KeyRecord:
         current = self.get_active(key_id)
         current.status = "retired"
@@ -75,5 +81,9 @@ class KeyManagementModule:
         return rotated
 
     def revoke(self, key_id: str) -> None:
-        self.get_active(key_id).status = "revoked"
+        if not any(item.key_id == key_id for item in self.records.values()):
+            raise ValueError("key is not available")
+        for record in self.records.values():
+            if record.key_id == key_id:
+                record.status = "revoked"
         self._save()

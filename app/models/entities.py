@@ -45,13 +45,16 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(50), nullable=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=True, index=True)
+    username_lookup: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=True)
+    email_lookup: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=True)
+    encrypted_profile: Mapped[str] = mapped_column(Text, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(SqlEnum(UserRole), default=UserRole.CITIZEN)
-    full_name: Mapped[str] = mapped_column(String(120))
-    phone: Mapped[str] = mapped_column(String(40), default="")
-    address: Mapped[str] = mapped_column(String(255), default="")
+    full_name: Mapped[str] = mapped_column(String(120), nullable=True)
+    phone: Mapped[str] = mapped_column(String(40), default="", nullable=True)
+    address: Mapped[str] = mapped_column(String(255), default="", nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -135,8 +138,9 @@ class Post(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    title: Mapped[str] = mapped_column(String(160))
-    content: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(String(160), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=True)
+    encrypted_content: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 

@@ -84,3 +84,15 @@ def test_kms_persists_rotates_and_revokes(tmp_path):
     with pytest.raises(ValueError, match="active"):
         reloaded.get_active("user-data")
     assert first.status == "retired"
+
+
+def test_envelope_records_key_version_across_rotation(tmp_path):
+    kms = KeyManagementModule(tmp_path / "kms.json")
+    first = kms.generate("RSA", "versioned-user")
+    crypto = GovPayCrypto(kms, b"version-mac" * 4)
+    envelope = crypto.encrypt_user_record({"username": "versioned"}, first.key_id)
+    kms.rotate(first.key_id)
+    assert crypto.decrypt_user_record(envelope) == {"username": "versioned"}
+    kms.revoke(first.key_id)
+    with pytest.raises(ValueError, match="key version"):
+        crypto.decrypt_user_record(envelope)

@@ -22,11 +22,12 @@ from app.schemas.bill import PaymentInput
 from app.schemas.post import PostInput
 from app.schemas.support import SupportInput
 from app.schemas.user import RegistrationInput
-from app.services.auth_service import authenticate, delete_user, register_user
+from app.services.auth_service import authenticate, delete_user, hydrate_user, register_user
 from app.services.bill_service import BILL_TYPES, create_bill, get_bill, list_bills, refresh_overdue
+from app.services.crypto_service import encrypt_user_profile
 from app.services.notification_service import list_notifications
 from app.services.payment_service import create_payment, list_payments, review_payment, submit_payment_for_review
-from app.services.post_service import create_post, get_post, list_posts, update_post
+from app.services.post_service import create_post, get_post, hydrate_post, list_posts, update_post
 from app.services.support_service import add_message, create_conversation, get_conversation, list_conversations, set_status
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -52,6 +53,7 @@ def context(request: Request, **values):
         with SessionLocal() as db:
             user = db.get(User, user_id)
             if user:
+                hydrate_user(user)
                 unread_notifications = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read.is_(False)).count()
     return {"request": request, "user": user, "unread_notifications": unread_notifications, **values}
 
@@ -61,6 +63,7 @@ def current_user(request: Request, db: Session) -> User:
     user = db.get(User, user_id) if user_id else None
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Authentication required")
+    hydrate_user(user)
     return user
 
 
@@ -239,6 +242,7 @@ def profile(request: Request, db: Session = Depends(get_db)):
 def update_profile(request: Request, full_name: str = Form(...), phone: str = Form(""), address: str = Form(""), db: Session = Depends(get_db)):
     user = current_user(request, db)
     user.full_name, user.phone, user.address = full_name.strip(), phone.strip(), address.strip()
+    user.encrypted_profile = encrypt_user_profile(username=user.username, email=user.email, full_name=user.full_name, phone=user.phone, address=user.address)
     db.commit()
     return RedirectResponse("/profile?saved=1", status_code=303)
 
@@ -375,7 +379,11 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
 def admin_bills(request: Request, db: Session = Depends(get_db)):
     require_role(request, db, UserRole.ADMIN)
     citizens = list(db.scalars(select(User).where(User.role == UserRole.CITIZEN, User.is_active.is_(True)).order_by(User.username)))
+    for citizen in citizens:
+        hydrate_user(citizen)
     bills = list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100)))
+    for bill in bills:
+        hydrate_user(bill.user)
     return templates.TemplateResponse("admin/bills.html", context(request, citizens=citizens, bills=bills, bill_types=BILL_TYPES))
 
 
@@ -387,6 +395,8 @@ def admin_create_bill(request: Request, bill_type: str = Form(...), title: str =
         created = create_bill(db, admin_id=admin.id, bill_type=bill_type, title=title.strip(), description=description.strip(), amount=Decimal(amount), due_date=due_date, scope=scope, citizen_id=selected_citizen_id)
     except (ValueError, InvalidOperation) as exc:
         citizens = list(db.scalars(select(User).where(User.role == UserRole.CITIZEN, User.is_active.is_(True)).order_by(User.username)))
+        for citizen in citizens:
+            hydrate_user(citizen)
         return form_error(request, str(exc), "admin/bills.html", citizens=citizens, bills=list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100))), bill_types=BILL_TYPES)
     return RedirectResponse(f"/admin/bills?created={len(created)}", status_code=303)
 
@@ -394,7 +404,10 @@ def admin_create_bill(request: Request, bill_type: str = Form(...), title: str =
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users(request: Request, db: Session = Depends(get_db)):
     require_role(request, db, UserRole.ADMIN)
-    return templates.TemplateResponse("admin/users.html", context(request, users=list(db.scalars(select(User).order_by(User.created_at.desc())))))
+    users = list(db.scalars(select(User).order_by(User.created_at.desc())))
+    for item in users:
+        hydrate_user(item)
+    return templates.TemplateResponse("admin/users.html", context(request, users=users))
 
 
 @app.post("/admin/users")
@@ -423,7 +436,10 @@ def admin_delete_user(request: Request, user_id: int, db: Session = Depends(get_
 @app.get("/admin/payments", response_class=HTMLResponse)
 def admin_payments(request: Request, db: Session = Depends(get_db)):
     require_role(request, db, UserRole.ADMIN)
-    return templates.TemplateResponse("admin/payments.html", context(request, payments=list_payments(db)))
+    payments = list_payments(db)
+    for payment in payments:
+        hydrate_user(payment.user)
+    return templates.TemplateResponse("admin/payments.html", context(request, payments=payments))
 
 
 @app.get("/admin/support", response_class=HTMLResponse)
