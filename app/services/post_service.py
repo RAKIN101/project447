@@ -1,5 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.security import utcnow
 from app.models import Post
@@ -10,8 +11,8 @@ from app.services.auth_service import hydrate_user
 def hydrate_post(post: Post) -> Post:
     if post.encrypted_content:
         payload = decrypt_post(post.encrypted_content)
-        post.title = payload["title"]
-        post.content = payload["content"]
+        set_committed_value(post, "title", payload["title"])
+        set_committed_value(post, "content", payload["content"])
     if post.user:
         hydrate_user(post.user)
     return post
@@ -27,7 +28,7 @@ def create_post(db: Session, user_id: int, title: str, content: str) -> Post:
     db.add(post)
     db.commit()
     db.refresh(post)
-    return post
+    return hydrate_post(post)
 
 
 def get_post(db: Session, post_id: int) -> Post | None:
@@ -39,4 +40,4 @@ def update_post(db: Session, post: Post, title: str, content: str) -> Post:
     post.title, post.content, post.encrypted_content, post.updated_at = "", "", encrypt_post(title=title, content=content), utcnow()
     db.commit()
     db.refresh(post)
-    return post
+    return hydrate_post(post)

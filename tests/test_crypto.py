@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.crypto.ecc import ecc_decrypt, ecc_encrypt, generate_ecc_keypair
+from app.crypto.attack_demos import run_all_attack_demonstrations
 from app.crypto.envelope import GovPayCrypto
 from app.crypto.kms import KeyManagementModule
 from app.crypto.mac import mac_bytes, verify_mac
@@ -86,6 +87,18 @@ def test_kms_persists_rotates_and_revokes(tmp_path):
     assert first.status == "retired"
 
 
+def test_kms_can_rsa_wrap_private_records(tmp_path):
+    wrapper = generate_rsa_keypair()
+    path = tmp_path / "wrapped-kms.json"
+    kms = KeyManagementModule(path, wrapper.public, wrapper.private)
+    kms.generate("ECC", "wrapped-post-data")
+    assert '"scalar"' not in path.read_text(encoding="utf-8")
+    reloaded = KeyManagementModule(path, wrapper.public, wrapper.private)
+    assert reloaded.get_active("wrapped-post-data").private["scalar"]
+    with pytest.raises(ValueError, match="wrapping"):
+        KeyManagementModule(path)
+
+
 def test_envelope_records_key_version_across_rotation(tmp_path):
     kms = KeyManagementModule(tmp_path / "kms.json")
     first = kms.generate("RSA", "versioned-user")
@@ -96,3 +109,19 @@ def test_envelope_records_key_version_across_rotation(tmp_path):
     kms.revoke(first.key_id)
     with pytest.raises(ValueError, match="key version"):
         crypto.decrypt_user_record(envelope)
+
+
+def test_all_eight_cryptoanalysis_demonstrations_block_the_attack():
+    results = run_all_attack_demonstrations()
+    assert len(results) == 8
+    assert all(result.attack_blocked for result in results)
+    assert {result.name for result in results} == {
+        "hmac-forgery",
+        "envelope-metadata-tampering",
+        "rsa-oaep-tampering",
+        "rsa-wrong-key",
+        "ecc-invalid-point",
+        "ecc-malformed-ciphertext",
+        "otp-brute-force",
+        "session-replay-after-logout",
+    }

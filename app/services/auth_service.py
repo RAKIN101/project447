@@ -1,5 +1,6 @@
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.security import hash_password, verify_password
 from app.models import User
@@ -47,9 +48,9 @@ def authenticate(db: Session, username: str, password: str) -> User | None:
 def hydrate_user(user: User) -> User:
     if user.encrypted_profile:
         profile = decrypt_user_profile(user.encrypted_profile)
-        user.username = profile["username"]
-        user.email = profile["email"]
-        user.full_name = profile["full_name"]
-        user.phone = profile["phone"]
-        user.address = profile["address"]
+        set_committed_value(user, "username", profile["username"])
+        set_committed_value(user, "email", profile["email"])
+        set_committed_value(user, "full_name", profile["full_name"])
+        set_committed_value(user, "phone", profile["phone"])
+        set_committed_value(user, "address", profile["address"])
     return user

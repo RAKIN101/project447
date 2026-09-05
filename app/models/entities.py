@@ -69,11 +69,12 @@ class Bill(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    bill_type: Mapped[str] = mapped_column(String(50))
-    title: Mapped[str] = mapped_column(String(150))
-    description: Mapped[str] = mapped_column(Text, default="")
-    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    due_date: Mapped[date] = mapped_column(Date)
+    bill_type: Mapped[str] = mapped_column(String(50), nullable=True)
+    title: Mapped[str] = mapped_column(String(150), nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=True)
+    encrypted_data: Mapped[str] = mapped_column(Text, nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=True)
+    due_date: Mapped[date] = mapped_column(Date, nullable=True)
     status: Mapped[BillStatus] = mapped_column(SqlEnum(BillStatus), default=BillStatus.PENDING)
     paid_date = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -88,11 +89,12 @@ class Payment(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     bill_id: Mapped[int] = mapped_column(ForeignKey("bills.id"), index=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
-    payment_method: Mapped[str] = mapped_column(String(50))
-    transaction_reference: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=True)
+    payment_method: Mapped[str] = mapped_column(String(50), nullable=True)
+    transaction_reference: Mapped[str] = mapped_column(String(40), unique=True, index=True, nullable=True)
+    encrypted_data: Mapped[str] = mapped_column(Text, nullable=True)
     status: Mapped[PaymentStatus] = mapped_column(SqlEnum(PaymentStatus), default=PaymentStatus.SUCCESSFUL)
-    payment_date: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    payment_date: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     user = relationship("User", back_populates="payments")
@@ -106,11 +108,12 @@ class PaymentVerification(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     payment_id: Mapped[int] = mapped_column(ForeignKey("payments.id"), unique=True, index=True)
     submitted_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    proof_text: Mapped[str] = mapped_column(Text, default="")
-    proof_image_path: Mapped[str] = mapped_column(String(255), default="")
+    proof_text: Mapped[str] = mapped_column(Text, default="", nullable=True)
+    proof_image_path: Mapped[str] = mapped_column(String(255), default="", nullable=True)
+    encrypted_proof: Mapped[str] = mapped_column(Text, nullable=True)
     status: Mapped[VerificationStatus] = mapped_column(SqlEnum(VerificationStatus), default=VerificationStatus.PENDING)
     reviewer_id = mapped_column(ForeignKey("users.id"), nullable=True)
-    reviewer_note: Mapped[str] = mapped_column(Text, default="")
+    reviewer_note: Mapped[str] = mapped_column(Text, default="", nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     reviewed_at = mapped_column(DateTime, nullable=True)
 
@@ -124,9 +127,10 @@ class Notification(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    title: Mapped[str] = mapped_column(String(160))
-    message: Mapped[str] = mapped_column(Text)
-    link: Mapped[str] = mapped_column(String(255), default="")
+    title: Mapped[str] = mapped_column(String(160), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=True)
+    link: Mapped[str] = mapped_column(String(255), default="", nullable=True)
+    encrypted_content: Mapped[str] = mapped_column(Text, nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -152,7 +156,8 @@ class SupportConversation(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    subject: Mapped[str] = mapped_column(String(160))
+    subject: Mapped[str] = mapped_column(String(160), nullable=True)
+    encrypted_subject: Mapped[str] = mapped_column(Text, nullable=True)
     status: Mapped[ConversationStatus] = mapped_column(SqlEnum(ConversationStatus), default=ConversationStatus.OPEN)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
@@ -167,8 +172,30 @@ class SupportMessage(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     conversation_id: Mapped[int] = mapped_column(ForeignKey("support_conversations.id"), index=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    message: Mapped[str] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(Text, nullable=True)
+    encrypted_content: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     conversation = relationship("SupportConversation", back_populates="messages")
     sender = relationship("User")
+
+
+class AuthSessionRecord(Base):
+    __tablename__ = "auth_sessions"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class OTPChallenge(Base):
+    __tablename__ = "otp_challenges"
+
+    session_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    code_mac: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    attempts: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

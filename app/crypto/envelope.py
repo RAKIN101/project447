@@ -47,25 +47,61 @@ class GovPayCrypto:
         return body, self.kms.get_for_decryption(body["key_id"], body["version"])
 
     def encrypt_user_record(self, record: dict[str, Any], key_id: str) -> str:
+        return self.encrypt_rsa_record(record, key_id)
+
+    def encrypt_rsa_record(self, record: dict[str, Any], key_id: str) -> str:
         key = self.kms.get_active(key_id)
         if key.algorithm != "RSA":
-            raise ValueError("user records require an RSA key")
+            raise ValueError("record requires an RSA key")
         return self._wrap("RSA", key_id, key.version, rsa_encrypt(RSAPublicKey(**key.public), _canonical(record)))
 
     def decrypt_user_record(self, envelope: str) -> dict[str, Any]:
+        return self.decrypt_rsa_record(envelope)
+
+    def decrypt_rsa_record(self, envelope: str) -> dict[str, Any]:
         body, key = self._unwrap(envelope)
         if body["algorithm"] != "RSA":
-            raise ValueError("user records require RSA")
+            raise ValueError("record requires RSA")
         return json.loads(rsa_decrypt(RSAPrivateKey(**key.private), body["ciphertext"]))
 
     def encrypt_post_record(self, record: dict[str, Any], key_id: str) -> str:
+        return self.encrypt_ecc_record(record, key_id)
+
+    def encrypt_ecc_record(self, record: dict[str, Any], key_id: str) -> str:
         key = self.kms.get_active(key_id)
         if key.algorithm != "ECC":
-            raise ValueError("post records require an ECC key")
+            raise ValueError("record requires an ECC key")
         return self._wrap("ECC", key_id, key.version, ecc_encrypt(ECCPublicKey(**key.public), _canonical(record)))
 
     def decrypt_post_record(self, envelope: str) -> dict[str, Any]:
+        return self.decrypt_ecc_record(envelope)
+
+    def decrypt_ecc_record(self, envelope: str) -> dict[str, Any]:
         body, key = self._unwrap(envelope)
         if body["algorithm"] != "ECC":
-            raise ValueError("post records require ECC")
+            raise ValueError("record requires ECC")
         return json.loads(ecc_decrypt(ECCPrivateKey(**key.private), body["ciphertext"]))
+
+    def encrypt_rsa_bytes(self, value: bytes, key_id: str) -> str:
+        key = self.kms.get_active(key_id)
+        if key.algorithm != "RSA":
+            raise ValueError("file payload requires an RSA key")
+        return self._wrap("RSA", key_id, key.version, rsa_encrypt(RSAPublicKey(**key.public), value))
+
+    def decrypt_rsa_bytes(self, envelope: str) -> bytes:
+        body, key = self._unwrap(envelope)
+        if body["algorithm"] != "RSA":
+            raise ValueError("file payload requires RSA")
+        return rsa_decrypt(RSAPrivateKey(**key.private), body["ciphertext"])
+
+    def encrypt_ecc_bytes(self, value: bytes, key_id: str) -> str:
+        key = self.kms.get_active(key_id)
+        if key.algorithm != "ECC":
+            raise ValueError("file payload requires an ECC key")
+        return self._wrap("ECC", key_id, key.version, ecc_encrypt(ECCPublicKey(**key.public), value))
+
+    def decrypt_ecc_bytes(self, envelope: str) -> bytes:
+        body, key = self._unwrap(envelope)
+        if body["algorithm"] != "ECC":
+            raise ValueError("file payload requires ECC")
+        return ecc_decrypt(ECCPrivateKey(**key.private), body["ciphertext"])

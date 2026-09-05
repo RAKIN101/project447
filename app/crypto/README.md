@@ -25,4 +25,13 @@ Login        -> password.py + otp.py + session/RBAC -> dashboard
 No AES, DES, 3DES, Fernet, ChaCha20, or RSA/ECC library encryption is used.
 HMAC is permitted here solely as a MAC for integrity; it is not an encryption
 algorithm. The KMS JSON file is an educational local store and should be
-replaced with an HSM or OS key vault for a real deployment.
+replaced with an HSM or OS key vault for a real deployment. When configured,
+the JSON backend RSA-wraps private records using deployment-provided RSA
+wrapping keys; production startup requires those wrapping keys.
+
+## Cryptoanalysis demonstrations
+
+`app.crypto.attack_demos.run_all_attack_demonstrations()` executes eight
+named demonstrations: HMAC forgery, envelope metadata tampering, RSA OAEP
+tampering, RSA wrong-key decryption, ECC invalid-point injection, malformed
+ECC ciphertext, OTP brute force, and post-logout session replay.

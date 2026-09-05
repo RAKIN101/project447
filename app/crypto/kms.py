@@ -4,13 +4,14 @@ import json
 import os
 import secrets
 import stat
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from app.crypto.ecc import generate_ecc_keypair
-from app.crypto.rsa import generate_rsa_keypair
+from app.crypto.rsa import RSAPrivateKey, RSAPublicKey, generate_rsa_keypair, rsa_decrypt, rsa_encrypt
 
 
 @dataclass
@@ -20,29 +21,65 @@ class KeyRecord:
     version: int
     status: str
     public: dict[str, Any]
-    private: dict[str, Any]
+    private: dict[str, Any] | str
     created_at: str
 
 
 class KeyManagementModule:
     """Generate, persist, rotate, retire, and revoke asymmetric keys."""
 
-    def __init__(self, path: str | Path = ".govpay-kms.json"):
+    def __init__(self, path: str | Path = ".govpay-kms.json", wrapping_public: RSAPublicKey | None = None, wrapping_private: RSAPrivateKey | None = None):
         self.path = Path(path)
+        self.wrapping_public = wrapping_public
+        self.wrapping_private = wrapping_private
         self.records: dict[str, KeyRecord] = {}
         self._load()
 
     def _load(self) -> None:
         if self.path.exists():
+            self._validate_path()
             values = json.loads(self.path.read_text(encoding="utf-8"))
+            for item in values:
+                if isinstance(item.get("private"), str):
+                    if not self.wrapping_private:
+                        raise ValueError("KMS private-key wrapping material is required")
+                    item["private"] = json.loads(rsa_decrypt(self.wrapping_private, item["private"]))
             self.records = {f"{item['key_id']}:v{item['version']}": KeyRecord(**item) for item in values}
 
     def _save(self) -> None:
-        self.path.write_text(json.dumps([asdict(item) for item in self.records.values()], indent=2), encoding="utf-8")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        values = []
+        for item in self.records.values():
+            serialized = asdict(item)
+            if self.wrapping_public:
+                serialized["private"] = rsa_encrypt(self.wrapping_public, json.dumps(serialized["private"], separators=(",", ":")).encode("utf-8"))
+            values.append(serialized)
+        payload = json.dumps(values, indent=2)
+        descriptor, temporary_name = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=self.path.parent)
+        try:
+            os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as temporary:
+                temporary.write(payload)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_name, self.path)
+        finally:
+            if os.path.exists(temporary_name):
+                os.unlink(temporary_name)
         try:
             os.chmod(self.path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
+
+    def _validate_path(self) -> None:
+        if self.path.is_symlink():
+            raise ValueError("KMS path must not be a symbolic link")
+        try:
+            mode = self.path.stat().st_mode
+            if os.name != "nt" and mode & (stat.S_IRWXG | stat.S_IRWXO):
+                raise ValueError("KMS file permissions are too broad")
+        except OSError as exc:
+            raise ValueError("KMS file cannot be inspected") from exc
 
     def generate(self, algorithm: str, key_id: str | None = None) -> KeyRecord:
         algorithm = algorithm.upper()

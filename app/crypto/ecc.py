@@ -30,6 +30,8 @@ def _add(first: Point, second: Point) -> Point:
     if x1 == x2 and (y1 + y2) % _P == 0:
         return None
     if first == second:
+        if y1 % _P == 0:
+            return None
         slope = (3 * x1 * x1) * pow(2 * y1, -1, _P) % _P
     else:
         slope = (y2 - y1) * pow(x2 - x1, -1, _P) % _P
@@ -52,11 +54,26 @@ def _serialize_point(point: Point) -> str:
     return "" if point is None else f"{point[0]:064x}:{point[1]:064x}"
 
 
+def _is_on_curve(point: Point) -> bool:
+    if point is None:
+        return False
+    x, y = point
+    return 0 <= x < _P and 0 <= y < _P and (y * y - (x * x * x + _B)) % _P == 0
+
+
 def _deserialize_point(value: str) -> Point:
-    if not value:
-        return None
-    x, y = value.split(":")
-    return int(x, 16), int(y, 16)
+    if not isinstance(value, str) or not value:
+        raise ValueError("ECC point cannot be infinity")
+    parts = value.split(":")
+    if len(parts) != 2 or any(len(part) != 64 for part in parts):
+        raise ValueError("invalid ECC point encoding")
+    try:
+        point = int(parts[0], 16), int(parts[1], 16)
+    except ValueError as exc:
+        raise ValueError("invalid ECC point encoding") from exc
+    if not _is_on_curve(point) or _multiply(_N, point) is not None:
+        raise ValueError("invalid ECC point")
+    return point
 
 
 @dataclass
@@ -107,6 +124,8 @@ def _decode_message(point: Point) -> bytes:
 def ecc_encrypt(public: ECCPublicKey, message: bytes) -> str:
     """Encrypt bytes with ECC-ElGamal in 28-byte point-encoding chunks."""
     public_point = _deserialize_point(public.point)
+    if not _is_on_curve(public_point):
+        raise ValueError("invalid ECC public key")
     blocks = []
     for start in range(0, len(message), 28):
         message_point = _encode_message(message[start : start + 28])
@@ -118,11 +137,23 @@ def ecc_encrypt(public: ECCPublicKey, message: bytes) -> str:
 
 def ecc_decrypt(private: ECCPrivateKey, ciphertext: str) -> bytes:
     """Recover bytes using M = C2 - dC1."""
+    if not isinstance(private.scalar, int) or not 1 <= private.scalar < _N:
+        raise ValueError("invalid ECC private key")
+    try:
+        blocks = json.loads(ciphertext)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid ECC ciphertext") from exc
+    if not isinstance(blocks, list):
+        raise ValueError("invalid ECC ciphertext")
     output = bytearray()
-    for block in json.loads(ciphertext):
+    for block in blocks:
+        if not isinstance(block, dict) or set(block) != {"c1", "c2"}:
+            raise ValueError("invalid ECC ciphertext block")
         c1 = _deserialize_point(block["c1"])
         c2 = _deserialize_point(block["c2"])
         shared = _multiply(private.scalar, c1)
+        if shared is None:
+            raise ValueError("invalid ECC shared point")
         inverse_shared = (shared[0], (-shared[1]) % _P)
         output.extend(_decode_message(_add(c2, inverse_shared)))
     return bytes(output)
