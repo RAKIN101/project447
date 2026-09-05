@@ -46,12 +46,14 @@ def create_tables() -> None:
 
 def context(request: Request, **values):
     user = None
+    unread_notifications = 0
     user_id = request.session.get("user_id")
     if user_id:
         with SessionLocal() as db:
             user = db.get(User, user_id)
-            unread_notifications = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read.is_(False)).count()
-        return {"request": request, "user": user, "unread_notifications": unread_notifications if user else 0, **values}
+            if user:
+                unread_notifications = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read.is_(False)).count()
+    return {"request": request, "user": user, "unread_notifications": unread_notifications, **values}
 
 
 def current_user(request: Request, db: Session) -> User:
