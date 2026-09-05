@@ -437,6 +437,14 @@ def admin_verifications(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/verifications.html", context(request, payments=verifications))
 
 
+@app.get("/admin/verifications/{payment_id}")
+def admin_verification_link(request: Request, payment_id: int, db: Session = Depends(get_db)):
+    require_role(request, db, UserRole.ADMIN)
+    if not db.get(Payment, payment_id):
+        raise HTTPException(404, "Payment not found")
+    return RedirectResponse("/admin/verifications", status_code=303)
+
+
 @app.post("/admin/verifications/{payment_id}")
 def admin_review_verification(request: Request, payment_id: int, decision: str = Form(...), reviewer_note: str = Form(""), db: Session = Depends(get_db)):
     admin = require_role(request, db, UserRole.ADMIN)
