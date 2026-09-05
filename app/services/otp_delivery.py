@@ -5,6 +5,9 @@ from app.core.config import settings
 
 
 def deliver_otp(recipient: str, code: str) -> bool:
+    if settings.otp_delivery_mode.lower() == "console" and settings.debug:
+        print(f"[GovPay dev OTP] {recipient}: {code}")
+        return True
     if settings.otp_delivery_mode.lower() != "smtp" or not settings.smtp_host or not settings.smtp_from:
         return False
     message = EmailMessage()
