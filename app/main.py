@@ -1,7 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from secrets import token_hex
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -14,19 +16,22 @@ from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine, get_db
 from app.core.security import new_session_id
 from app.crypto.otp import generate_otp, verify_two_step
-from app.models import Bill, Payment, Post, SupportConversation, User
-from app.models.entities import BillStatus, ConversationStatus, UserRole
+from app.models import Bill, Notification, Payment, Post, SupportConversation, User
+from app.models.entities import BillStatus, ConversationStatus, PaymentStatus, UserRole, VerificationStatus
 from app.schemas.bill import PaymentInput
 from app.schemas.post import PostInput
 from app.schemas.support import SupportInput
 from app.schemas.user import RegistrationInput
-from app.services.auth_service import authenticate, register_user
-from app.services.bill_service import get_bill, list_bills, refresh_overdue
-from app.services.payment_service import create_payment, list_payments
+from app.services.auth_service import authenticate, delete_user, register_user
+from app.services.bill_service import BILL_TYPES, create_bill, get_bill, list_bills, refresh_overdue
+from app.services.notification_service import list_notifications
+from app.services.payment_service import create_payment, list_payments, review_payment, submit_payment_for_review
 from app.services.post_service import create_post, get_post, list_posts, update_post
 from app.services.support_service import add_message, create_conversation, get_conversation, list_conversations, set_status
 
 BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_DIR = BASE_DIR / "static" / "uploads" / "payment_proofs"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="GovPay", description="Government utility payment portal")
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret_key, https_only=False, same_site="lax")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -45,7 +50,8 @@ def context(request: Request, **values):
     if user_id:
         with SessionLocal() as db:
             user = db.get(User, user_id)
-    return {"request": request, "user": user, **values}
+            unread_notifications = db.query(Notification).filter(Notification.user_id == user.id, Notification.is_read.is_(False)).count()
+        return {"request": request, "user": user, "unread_notifications": unread_notifications if user else 0, **values}
 
 
 def current_user(request: Request, db: Session) -> User:
@@ -78,11 +84,11 @@ def register_page(request: Request):
 
 
 @app.post("/register")
-def register(request: Request, full_name: str = Form(...), username: str = Form(...), email: str = Form(...), phone: str = Form(""), address: str = Form(""), password: str = Form(...), confirm_password: str = Form(...), db: Session = Depends(get_db)):
+def register(request: Request, full_name: str = Form(...), username: str = Form(...), email: str = Form(...), phone: str = Form(""), address: str = Form(""), password: str = Form(...), confirm_password: str = Form(...), role: str = Form("Citizen"), db: Session = Depends(get_db)):
     if password != confirm_password:
         return form_error(request, "Passwords do not match.", "register.html")
     try:
-        data = RegistrationInput(full_name=full_name, username=username, email=email, phone=phone, address=address, password=password)
+        data = RegistrationInput(full_name=full_name, username=username, email=email, phone=phone, address=address, password=password, role=role)
         register_user(db, **data.model_dump())
     except (ValidationError, ValueError) as exc:
         return form_error(request, str(exc), "register.html")
@@ -181,23 +187,36 @@ def payment_page(request: Request, bill_id: int, db: Session = Depends(get_db)):
 
 
 @app.post("/payments/{bill_id}")
-def make_payment(request: Request, bill_id: int, payment_method: str = Form(...), db: Session = Depends(get_db)):
+async def make_payment(request: Request, bill_id: int, payment_method: str = Form(...), proof_text: str = Form(""), proof_image: UploadFile | None = File(None), db: Session = Depends(get_db)):
     user = current_user(request, db)
     bill = get_bill(db, bill_id, user.id)
     if not bill:
         raise HTTPException(404, "Bill not found")
     try:
         method = PaymentInput(payment_method=payment_method).payment_method
-        payment = create_payment(db, bill, user.id, method)
+        if not proof_text.strip() and not proof_image:
+            raise ValueError("Provide copied bill text or upload a bill image")
+        image_path = ""
+        if proof_image and proof_image.filename:
+            suffix = Path(proof_image.filename).suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                raise ValueError("Proof image must be PNG, JPG, JPEG, or WEBP")
+            content = await proof_image.read()
+            if len(content) > 5 * 1024 * 1024:
+                raise ValueError("Proof image must be 5 MB or smaller")
+            stored_name = f"{token_hex(16)}{suffix}"
+            (UPLOAD_DIR / stored_name).write_bytes(content)
+            image_path = f"/static/uploads/payment_proofs/{stored_name}"
+        submit_payment_for_review(db, bill, user.id, method, proof_text, image_path)
     except (ValidationError, ValueError) as exc:
         return form_error(request, str(exc), "payment_form.html", bill=bill)
-    return RedirectResponse(f"/payments/receipt/{payment.id}", status_code=303)
+    return RedirectResponse("/payments?submitted=1", status_code=303)
 
 
 @app.get("/payments", response_class=HTMLResponse)
 def payments_page(request: Request, db: Session = Depends(get_db)):
     user = current_user(request, db)
-    return templates.TemplateResponse("payments.html", context(request, payments=list_payments(db, user.id)))
+    return templates.TemplateResponse("payments.html", context(request, payments=list_payments(db, user.id), submitted=request.query_params.get("submitted")))
 
 
 @app.get("/payments/receipt/{payment_id}", response_class=HTMLResponse)
@@ -220,6 +239,16 @@ def update_profile(request: Request, full_name: str = Form(...), phone: str = Fo
     user.full_name, user.phone, user.address = full_name.strip(), phone.strip(), address.strip()
     db.commit()
     return RedirectResponse("/profile?saved=1", status_code=303)
+
+
+@app.get("/notifications")
+def notifications(request: Request, db: Session = Depends(get_db)):
+    user = current_user(request, db)
+    items = list_notifications(db, user.id)
+    for item in items:
+        item.is_read = True
+    db.commit()
+    return templates.TemplateResponse("notifications.html", context(request, notifications=items))
 
 
 @app.get("/posts", response_class=HTMLResponse)
@@ -340,10 +369,52 @@ def admin_dashboard(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/dashboard.html", context(request, stats=stats))
 
 
+@app.get("/admin/bills", response_class=HTMLResponse)
+def admin_bills(request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, UserRole.ADMIN)
+    citizens = list(db.scalars(select(User).where(User.role == UserRole.CITIZEN, User.is_active.is_(True)).order_by(User.username)))
+    bills = list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100)))
+    return templates.TemplateResponse("admin/bills.html", context(request, citizens=citizens, bills=bills, bill_types=BILL_TYPES))
+
+
+@app.post("/admin/bills")
+def admin_create_bill(request: Request, bill_type: str = Form(...), title: str = Form(...), description: str = Form(""), amount: str = Form(...), due_date: date = Form(...), scope: str = Form(...), citizen_id: int | None = Form(None), db: Session = Depends(get_db)):
+    admin = require_role(request, db, UserRole.ADMIN)
+    try:
+        created = create_bill(db, admin_id=admin.id, bill_type=bill_type, title=title.strip(), description=description.strip(), amount=Decimal(amount), due_date=due_date, scope=scope, citizen_id=citizen_id)
+    except (ValueError, InvalidOperation) as exc:
+        citizens = list(db.scalars(select(User).where(User.role == UserRole.CITIZEN, User.is_active.is_(True)).order_by(User.username)))
+        return form_error(request, str(exc), "admin/bills.html", citizens=citizens, bills=list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100))), bill_types=BILL_TYPES)
+    return RedirectResponse(f"/admin/bills?created={len(created)}", status_code=303)
+
+
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users(request: Request, db: Session = Depends(get_db)):
     require_role(request, db, UserRole.ADMIN)
     return templates.TemplateResponse("admin/users.html", context(request, users=list(db.scalars(select(User).order_by(User.created_at.desc())))))
+
+
+@app.post("/admin/users")
+def admin_create_user(request: Request, full_name: str = Form(...), username: str = Form(...), email: str = Form(...), password: str = Form(...), role: str = Form("Citizen"), db: Session = Depends(get_db)):
+    require_role(request, db, UserRole.ADMIN)
+    try:
+        data = RegistrationInput(full_name=full_name, username=username, email=email, phone="", address="", password=password, role=role)
+        register_user(db, **data.model_dump())
+    except (ValidationError, ValueError) as exc:
+        return form_error(request, str(exc), "admin/users.html", users=list(db.scalars(select(User).order_by(User.created_at.desc()))))
+    return RedirectResponse("/admin/users?created=1", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/delete")
+def admin_delete_user(request: Request, user_id: int, db: Session = Depends(get_db)):
+    admin = require_role(request, db, UserRole.ADMIN)
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.id == admin.id:
+        return form_error(request, "You cannot delete your own admin account.", "admin/users.html", users=list(db.scalars(select(User).order_by(User.created_at.desc()))))
+    delete_user(db, user)
+    return RedirectResponse("/admin/users?deleted=1", status_code=303)
 
 
 @app.get("/admin/payments", response_class=HTMLResponse)
@@ -356,6 +427,23 @@ def admin_payments(request: Request, db: Session = Depends(get_db)):
 def admin_support(request: Request, db: Session = Depends(get_db)):
     require_role(request, db, UserRole.ADMIN)
     return templates.TemplateResponse("admin/support.html", context(request, conversations=list_conversations(db)))
+
+
+@app.get("/admin/verifications", response_class=HTMLResponse)
+def admin_verifications(request: Request, db: Session = Depends(get_db)):
+    require_role(request, db, UserRole.ADMIN)
+    verifications = list(db.scalars(select(Payment).where(Payment.status == PaymentStatus.PENDING).order_by(Payment.created_at.desc())))
+    return templates.TemplateResponse("admin/verifications.html", context(request, payments=verifications))
+
+
+@app.post("/admin/verifications/{payment_id}")
+def admin_review_verification(request: Request, payment_id: int, decision: str = Form(...), reviewer_note: str = Form(""), db: Session = Depends(get_db)):
+    admin = require_role(request, db, UserRole.ADMIN)
+    payment = db.get(Payment, payment_id)
+    if not payment:
+        raise HTTPException(404, "Payment not found")
+    review_payment(db, payment, admin.id, decision == "approve", reviewer_note)
+    return RedirectResponse("/admin/verifications", status_code=303)
 
 
 @app.get("/api/health")

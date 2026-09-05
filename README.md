@@ -2,6 +2,8 @@
 
 GovPay is a Python-only FastAPI/Jinja2 prototype for government utility bill payments. It includes citizen accounts, OTP sign-in, bill management, prototype payments, receipts, posts, helpdesk conversations, and admin views.
 
+Bills are displayed in Bangladeshi Taka (BDT). Admins can issue Electricity, Water, Gas, Waste, or Property Tax bills either to one citizen or globally to every active citizen. Citizens submit copied bill text or an image/screenshot as payment proof; admins approve or reject the proof and citizens receive in-app notifications.
+
 > Cryptographic functionality will be implemented in a later development phase. This phase intentionally does not implement RSA, ECC, HMAC, AES/Fernet, encryption, KMS, key rotation, or cryptoanalysis.
 
 ## Technology
@@ -70,6 +72,8 @@ Public: `/`, `/register`, `/login`, `/otp`.
 Citizens: `/dashboard`, `/bills`, `/bills/{id}`, `/payments`, `/payments/{bill_id}`, `/payments/receipt/{id}`, `/profile`, `/posts`, `/support`, `/support/{id}`.
 
 Admins: `/admin`, `/admin/users`, `/admin/payments`, `/admin/support`, plus post moderation through `/posts`.
+
+Admin billing: `/admin/bills` creates individual or global bills. Payment review: `/admin/verifications` approves or rejects citizen proof. Notifications: `/notifications`.
 
 Authentication is a signed session cookie containing only an authenticated user id. Pending OTP values are held server-side in memory. Role checks happen in route handlers and ownership checks restrict bills, posts, and support conversations to their owners.
 

@@ -30,6 +30,12 @@ class PaymentStatus(str, Enum):
     FAILED = "Failed"
 
 
+class VerificationStatus(str, Enum):
+    PENDING = "Pending"
+    APPROVED = "Approved"
+    REJECTED = "Rejected"
+
+
 class ConversationStatus(str, Enum):
     OPEN = "Open"
     CLOSED = "Closed"
@@ -52,6 +58,7 @@ class User(Base):
     bills = relationship("Bill", back_populates="user", cascade="all, delete-orphan")
     payments = relationship("Payment", back_populates="user")
     posts = relationship("Post", back_populates="user", cascade="all, delete-orphan")
+    support_conversations = relationship("SupportConversation", back_populates="user", cascade="all, delete-orphan")
 
 
 class Bill(Base):
@@ -87,6 +94,40 @@ class Payment(Base):
 
     user = relationship("User", back_populates="payments")
     bill = relationship("Bill", back_populates="payments")
+    verification = relationship("PaymentVerification", back_populates="payment", uselist=False, cascade="all, delete-orphan")
+
+
+class PaymentVerification(Base):
+    __tablename__ = "payment_verifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    payment_id: Mapped[int] = mapped_column(ForeignKey("payments.id"), unique=True, index=True)
+    submitted_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    proof_text: Mapped[str] = mapped_column(Text, default="")
+    proof_image_path: Mapped[str] = mapped_column(String(255), default="")
+    status: Mapped[VerificationStatus] = mapped_column(SqlEnum(VerificationStatus), default=VerificationStatus.PENDING)
+    reviewer_id = mapped_column(ForeignKey("users.id"), nullable=True)
+    reviewer_note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    reviewed_at = mapped_column(DateTime, nullable=True)
+
+    payment = relationship("Payment", back_populates="verification")
+    submitted_by = relationship("User", foreign_keys=[submitted_by_id])
+    reviewer = relationship("User", foreign_keys=[reviewer_id])
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    message: Mapped[str] = mapped_column(Text)
+    link: Mapped[str] = mapped_column(String(255), default="")
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    user = relationship("User")
 
 
 class Post(Base):
@@ -112,7 +153,7 @@ class SupportConversation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
-    user = relationship("User")
+    user = relationship("User", back_populates="support_conversations")
     messages = relationship("SupportMessage", back_populates="conversation", cascade="all, delete-orphan")
 
 

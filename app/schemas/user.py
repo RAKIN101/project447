@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -8,3 +10,4 @@ class RegistrationInput(BaseModel):
     phone: str = Field(max_length=40)
     address: str = Field(max_length=255)
     password: str = Field(min_length=8, max_length=128)
+    role: Literal["Citizen", "Admin"] = "Citizen"
