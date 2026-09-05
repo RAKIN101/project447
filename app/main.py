@@ -378,10 +378,11 @@ def admin_bills(request: Request, db: Session = Depends(get_db)):
 
 
 @app.post("/admin/bills")
-def admin_create_bill(request: Request, bill_type: str = Form(...), title: str = Form(...), description: str = Form(""), amount: str = Form(...), due_date: date = Form(...), scope: str = Form(...), citizen_id: int | None = Form(None), db: Session = Depends(get_db)):
+def admin_create_bill(request: Request, bill_type: str = Form(...), title: str = Form(...), description: str = Form(""), amount: str = Form(...), due_date: date = Form(...), scope: str = Form(...), citizen_id: str = Form(""), db: Session = Depends(get_db)):
     admin = require_role(request, db, UserRole.ADMIN)
     try:
-        created = create_bill(db, admin_id=admin.id, bill_type=bill_type, title=title.strip(), description=description.strip(), amount=Decimal(amount), due_date=due_date, scope=scope, citizen_id=citizen_id)
+        selected_citizen_id = int(citizen_id) if citizen_id.strip() else None
+        created = create_bill(db, admin_id=admin.id, bill_type=bill_type, title=title.strip(), description=description.strip(), amount=Decimal(amount), due_date=due_date, scope=scope, citizen_id=selected_citizen_id)
     except (ValueError, InvalidOperation) as exc:
         citizens = list(db.scalars(select(User).where(User.role == UserRole.CITIZEN, User.is_active.is_(True)).order_by(User.username)))
         return form_error(request, str(exc), "admin/bills.html", citizens=citizens, bills=list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100))), bill_types=BILL_TYPES)
