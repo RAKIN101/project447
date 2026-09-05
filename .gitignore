@@ -11,6 +11,7 @@ govpay.db
 govpay_local.db
 .govpay-kms.json
 crypto-smoke-kms.json
+app/static/uploads/
 .idea/
 .vscode/
 .DS_Store
