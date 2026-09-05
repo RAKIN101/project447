@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.coverage
+htmlcov/
+govpay.db
+govpay_local.db
+.govpay-kms.json
+crypto-smoke-kms.json
+.idea/
+.vscode/
+.DS_Store
