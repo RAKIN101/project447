@@ -27,7 +27,7 @@ from app.schemas.user import RegistrationInput
 from app.services.auth_service import authenticate, delete_user, hydrate_user, register_user
 from app.services.bill_service import BILL_TYPES, create_bill, get_bill, hydrate_bill, list_bills, refresh_overdue
 from app.services.crypto_service import decrypt_ecc_bytes, encrypt_ecc_bytes, encrypt_user_profile
-from app.services.notification_service import list_notifications
+from app.services.notification_service import list_notifications, hydrate_notification
 from app.services.otp_delivery import deliver_otp
 from app.services.payment_service import create_payment, hydrate_payment, list_payments, review_payment, submit_payment_for_review
 from app.services.post_service import create_post, get_post, hydrate_post, list_posts, update_post
@@ -303,6 +303,28 @@ def notifications(request: Request, db: Session = Depends(get_db)):
     items = list_notifications(db, user.id)
     return templates.TemplateResponse("notifications.html", context(request, notifications=items))
 
+
+
+
+@app.get("/notifications/{notification_id}/open")
+def open_notification(request: Request, notification_id: int, db: Session = Depends(get_db)):
+    user = current_user(request, db)
+
+    notification = db.scalar(
+        select(Notification).where(
+            Notification.id == notification_id,
+            Notification.user_id == user.id
+        )
+    )
+
+    if not notification:
+        raise HTTPException(404, "Notification not found")
+
+    hydrate_notification(notification)
+    notification.is_read = True
+    db.commit()
+
+    return RedirectResponse(notification.link or "/notifications", status_code=303)
 
 @app.get("/posts", response_class=HTMLResponse)
 def posts_page(request: Request, db: Session = Depends(get_db)):
