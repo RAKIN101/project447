@@ -15,3 +15,6 @@ app/static/uploads/
 .idea/
 .vscode/
 .DS_Store
+
+app/private_uploads/
+*.save

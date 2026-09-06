@@ -18,7 +18,7 @@ from app.core.otp_store import can_issue_persistent, consume_persistent, remembe
 from app.core.security import csrf_token, validate_csrf
 from app.core.sessions import create_persistent_auth_session, is_persistent_auth_session_valid, revoke_persistent_auth_session
 from app.crypto.otp import generate_otp
-from app.models import Bill, Notification, Payment, Post, SupportConversation, User
+from app.models import Bill, Notification, Payment, PaymentVerification, Post, SupportConversation, User
 from app.models.entities import BillStatus, ConversationStatus, PaymentStatus, UserRole, VerificationStatus
 from app.schemas.bill import PaymentInput
 from app.schemas.post import PostInput
@@ -267,18 +267,27 @@ def payment_proof(request: Request, payment_id: int, db: Session = Depends(get_d
     hydrate_payment(payment)
     if payment.user_id != user.id and user.role != UserRole.ADMIN:
         raise HTTPException(403, "Access denied")
-    file_name = payment.verification.proof_image_path if payment.verification else ""
-    if not file_name or Path(file_name).name != file_name:
+    if not payment.verification:
+        raise HTTPException(404, "Proof image not found")
+    file_name = Path(payment.verification.proof_image_path or "").name
+    if not file_name or not file_name.endswith(".enc"):
         raise HTTPException(404, "Proof image not found")
     encrypted_path = PRIVATE_UPLOAD_DIR / file_name
     if not encrypted_path.is_file():
         raise HTTPException(404, "Proof image not found")
     try:
         content = decrypt_ecc_bytes(encrypted_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, UnicodeDecodeError):
         raise HTTPException(404, "Proof image unavailable")
-    suffix = Path(file_name).stem.lower()
-    media_type = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(Path(suffix).suffix, "application/octet-stream")
+    original_name = file_name[:-4].lower()
+    if original_name.endswith(".png"):
+        media_type = "image/png"
+    elif original_name.endswith((".jpg", ".jpeg")):
+        media_type = "image/jpeg"
+    elif original_name.endswith(".webp"):
+        media_type = "image/webp"
+    else:
+        raise HTTPException(404, "Unsupported proof image format")
     return Response(content=content, media_type=media_type)
 
 
@@ -474,7 +483,7 @@ def admin_create_bill(request: Request, bill_type: str = Form(...), title: str =
         citizens = list(db.scalars(select(User).where(User.role == UserRole.CITIZEN, User.is_active.is_(True)).order_by(User.username)))
         for citizen in citizens:
             hydrate_user(citizen)
-        return form_error(request, str(exc), "admin/bills.html", citizens=citizens, bills=list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100))), bill_types=BILL_TYPES)
+        error_bills = list(db.scalars(select(Bill).order_by(Bill.created_at.desc()).limit(100))); [hydrate_bill(b) for b in error_bills]; [hydrate_user(b.user) for b in error_bills]; return form_error(request, str(exc), "admin/bills.html", citizens=citizens, bills=error_bills, bill_types=BILL_TYPES)
     return RedirectResponse(f"/admin/bills?created={len(created)}", status_code=303)
 
 
@@ -530,7 +539,7 @@ def admin_support(request: Request, db: Session = Depends(get_db)):
 @app.get("/admin/verifications", response_class=HTMLResponse)
 def admin_verifications(request: Request, db: Session = Depends(get_db)):
     require_role(request, db, UserRole.ADMIN)
-    verifications = list(db.scalars(select(Payment).where(Payment.status == PaymentStatus.PENDING).order_by(Payment.created_at.desc())))
+    verifications = list(db.scalars(select(Payment).join(PaymentVerification, PaymentVerification.payment_id == Payment.id).where(Payment.status == PaymentStatus.PENDING, PaymentVerification.status == VerificationStatus.PENDING).order_by(Payment.created_at.desc())))
     for payment in verifications:
         hydrate_payment(payment)
     return templates.TemplateResponse("admin/verifications.html", context(request, payments=verifications))
